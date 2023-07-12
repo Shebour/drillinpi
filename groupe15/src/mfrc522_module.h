@@ -12,10 +12,6 @@
  * The mfrc522_statistics structure keeps track of the amounts of bytes written and read
  * by the MFRC522 driver
  */
-struct mfrc522_statistics {
-	unsigned int bytes_read;
-	unsigned int bytes_written;
-};
 
 /**
  * Keep global information about the MFRC522 driver. This includes the answer buffer,
@@ -27,7 +23,6 @@ struct mfrc522_state {
 	bool buffer_full;
 	char answer[MFRC522_MAX_ANSWER_SIZE];
 	bool debug_on;
-	struct mfrc522_statistics stats;
 };
 
 #endif /* ! MFRC522_MODULE_H */

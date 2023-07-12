@@ -122,41 +122,6 @@ static const struct of_device_id mfrc522_match_table[] = {
 	{}
 };
 
-static ssize_t bits_read_show(struct device *dev, struct device_attribute *attr,
-			      char *buf)
-{
-	struct mfrc522_state *state = dev_get_drvdata(dev);
-
-	return snprintf(buf, 8, "%u\n", state->stats.bytes_read * 8);
-}
-
-DEVICE_ATTR_RO(bits_read);
-
-static ssize_t bits_written_show(struct device *dev,
-				 struct device_attribute *attr, char *buf)
-{
-	struct mfrc522_state *state = dev_get_drvdata(dev);
-
-	return snprintf(buf, 8, "%u\n", state->stats.bytes_written * 8);
-}
-
-DEVICE_ATTR_RO(bits_written);
-
-static struct attribute *mfrc522_attrs[] = {
-	&dev_attr_bits_read.attr,
-	&dev_attr_bits_written.attr,
-	NULL,
-};
-
-static const struct attribute_group mfrc522_group = {
-	.attrs = mfrc522_attrs,
-};
-
-static const struct attribute_group *mfrc522_groups[] = {
-	&mfrc522_group,
-	NULL,
-};
-
 static int mfrc522_spi_probe(struct spi_device *spi);
 
 static struct spi_driver mfrc522_spi_driver = {
@@ -226,7 +191,6 @@ static int __init mfrc522_init(void)
 		.minor = MISC_DYNAMIC_MINOR,
 		.name = "mfrc522_misc",
 		.fops = &mfrc522_fops,
-		.groups = mfrc522_groups,
 	};
 
 	state->debug_on = false;
