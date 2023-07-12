@@ -14,7 +14,7 @@
 
 static struct mfrc522 *device;
 static int mfrc522_spi_probe(struct spi_device *spi);
-static int buffer_full = 0;
+static int buffer_full;
 
 MODULE_LICENSE("GPL v2");
 MODULE_AUTHOR("DaemonOnUnix & Shebour");
@@ -73,9 +73,8 @@ int parse_cmd_write(const char *cmd, int *len, const char **data)
 
 void mem_write(const char *data)
 {
-	if (mfrc522_fifo_write(data, 25) < 0) {
+	if (mfrc522_fifo_write(data, 25) < 0)
 		pr_err("[MFRC522] Couldn't write to FIFO\n");
-	}
 
 	mfrc522_send_command(MFRC522_COMMAND_REG_RCV_ON,
 			MFRC522_COMMAND_REG_POWER_DOWN_OFF,
@@ -118,9 +117,8 @@ int generate_random(void)
 
 	mem_read(buffer);
 
-	for (i = 0; i < MFRC522_ID_SIZE; i++) {
+	for (i = 0; i < MFRC522_ID_SIZE; i++)
 		sprintf(char_buffer + i * 2, "%02X", buffer[i]);
-	}
 
 	pr_info("[MFRC522] Rand ID: %s\n", char_buffer);
 
@@ -169,13 +167,10 @@ void read_cmd(struct mfrc522 *dev, const char *cmd)
 
 	if (startswith(cmd, "debug:")) {
 		cmd += 6;
-		if (!strcmp(cmd, "on"))
-		{
+		if (!strcmp(cmd, "on")) {
 			device->debug = 1;
 			pr_info("[MFRC522] Debug on\n");
-		}
-		else if (!strcmp(cmd, "off"))
-		{
+		} else if (!strcmp(cmd, "off")) {
 			device->debug = 0;
 			pr_info("[MFRC522] Debug off\n");
 		}
@@ -183,9 +178,9 @@ void read_cmd(struct mfrc522 *dev, const char *cmd)
 	}
 	if (startswith(cmd, "version")) {
 		u8 version = mfrc522_get_version();
-		if (version == 0x91 || version == 0x92) {
+
+		if (version == 0x91 || version == 0x92)
 			pr_info("[MFRC522] version %d\n", version - 0x90);
-		}
 		return;
 	}
 	pr_err("[MFRC522] Unknown command !\n");
@@ -198,9 +193,8 @@ ssize_t driver_write(struct file *file, const char *buffer, size_t len,
 	struct mfrc522 *dev;
 	char k_buf[26] = { 0 };
 
-	if (copy_from_user(k_buf, buffer, len)) {
+	if (copy_from_user(k_buf, buffer, len))
 		pr_err("[MFRC522] Copy from user fail\n");
-	}
 	dev = container_of(file->private_data, struct mfrc522, misc);
 	read_cmd(dev, k_buf);
 	buffer_full = 1;
@@ -220,9 +214,8 @@ static ssize_t driver_read(struct file *file, char *buffer, size_t len,
 	if (!buffer_full)
 		return 0;
 
-	if (copy_to_user(buffer, dev->str, len)) {
+	if (copy_to_user(buffer, dev->str, len))
 		pr_err("[MFRC522] Copy to user fail\n");
-	}
 	buffer_full = 0;
 
 	return len;
@@ -252,6 +245,7 @@ static struct spi_driver mfrc522_spi_driver = {
 static int mfrc522_detect(struct spi_device *client)
 {
 	u8 version = mfrc522_get_version();
+
 	if (version == 0x91 || version == 0x92) {
 		version = version - 0x90;
 		pr_info("[MFRC522] version %d\n", version);
@@ -266,9 +260,8 @@ static int mfrc522_spi_probe(struct spi_device *client)
 {
 	pr_info("[MFRC522] SPI found\n");
 
-	if (client->max_speed_hz > MFRC522_SPI_MAX_CLOCK_SPEED) {
+	if (client->max_speed_hz > MFRC522_SPI_MAX_CLOCK_SPEED)
 		client->max_speed_hz = MFRC522_SPI_MAX_CLOCK_SPEED;
-	}
 
 	mfrc522_spi = client;
 
@@ -278,6 +271,8 @@ static int mfrc522_spi_probe(struct spi_device *client)
 static int __init mfrc522_init(void)
 {
 	int ret;
+
+	buffer_full = 0;
 
 	pr_info("[MFRC522] init\n");
 
