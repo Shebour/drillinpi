@@ -1,0 +1,8 @@
+hugo.girard
+daniel.frederic
+
+Organisation du code:
+
+src/                -> dossier source
+src/gistre_card     -> dossier du module palier 0
+src/mfrc522_c_linux -> dossier du module mrfc522

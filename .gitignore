@@ -1,0 +1,9 @@
+gistre24-dril-sdk-v2/
+*.cmd
+*.o
+*.ko
+*.mod.c
+*.mod
+*.symvers
+*.order
+*.d
