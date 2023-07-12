@@ -3,8 +3,6 @@
 #ifndef MFRC522_MODULE_H
 #define MFRC522_MODULE_H
 
-#define MFRC522_MAX_ANSWER_SIZE 256 // FIXME
-
 #include <linux/types.h>
 #include <linux/miscdevice.h>
 
@@ -18,11 +16,10 @@
  * in which the MFRC522's memory content shall be kept between writes and reads, as well
  * as statistics and information
  */
-struct mfrc522_state {
+struct mfrc522 {
 	struct miscdevice misc;
-	bool buffer_full;
-	char answer[MFRC522_MAX_ANSWER_SIZE];
-	bool debug_on;
+	char str[26];
+	bool debug;
 };
 
 #endif /* ! MFRC522_MODULE_H */

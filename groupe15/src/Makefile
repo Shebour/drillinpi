@@ -8,9 +8,6 @@ obj-m += mfrc522.o
 
 mfrc522-objs += mfrc522_module.o \
 				mfrc522_spi.o \
-				mfrc522_debug.o \
-				mfrc522_parser.o \
-				mfrc522_user_command.o
 
 # KDIR ?= /lib/modules/`uname -r`/build
 

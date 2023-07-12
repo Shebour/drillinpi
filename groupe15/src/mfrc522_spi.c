@@ -20,7 +20,6 @@ struct address_byte address_byte_build(u8 mode, u8 addr)
 		.addr = addr,
 		.rw = mode,
 	};
-
 	return byte;
 }
 
@@ -51,7 +50,6 @@ static void wait_for_cmd(void)
 
 	do {
 		cmd = mfrc522_read_command();
-		pr_info("[MFRC522] Current command is: 0x%x\n", cmd);
 	} while (cmd != MFRC522_COMMAND_IDLE);
 }
 
@@ -77,7 +75,6 @@ int mfrc522_read_command(void)
 
 	ret = mfrc522_register_read(mfrc522_spi, MFRC522_COMMAND_REG,
 				    &command_reg, 1);
-
 	if (ret < 0)
 		return ret;
 
@@ -94,10 +91,8 @@ int mfrc522_fifo_level(void)
 	if (ret < 0)
 		return ret;
 
-	// Mask the MSb to get the amount of bytes in the FIFO buffer
 	fifo_level &= MFRC522_FIFO_LEVEL_REG_LEVEL_MASK;
 
-	pr_info("[MFRC522] Fifo level: %d\n", fifo_level);
 
 	return fifo_level;
 }
@@ -157,7 +152,6 @@ int mfrc522_register_write(struct spi_device *client, u8 reg, u8 value)
 		address_byte_build(MFRC522_SPI_WRITE, reg);
 	u8 data[2] = { 0, value };
 
-	// We cannot directly put reg_write in data[0] at init time
 	memcpy(&data[0], &reg_write, sizeof(u8));
 
 	return spi_write(client, &data, 2);

@@ -5,116 +5,233 @@
 #include <linux/miscdevice.h>
 #include <linux/init.h>
 #include <linux/spi/spi.h>
-#include <linux/regmap.h>
 #include <linux/fs.h>
 
 #include "mfrc522_module.h"
-#include "mfrc522_user_command.h"
-#include "mfrc522_parser.h"
 #include "mfrc522_spi.h"
-#include "mfrc522_debug.h"
 
-#define MFRC522_VERSION_BASE 0x90
-#define MFRC522_VERSION_1 0x91
-#define MFRC522_VERSION_2 0x92
-#define MFRC522_VERSION_NUM(ver) ((ver)-MFRC522_VERSION_BASE)
+#define MFRC522_ID_SIZE 10
 
-static struct mfrc522_state *g_state;
+static struct mfrc522 *device;
+static int mfrc522_spi_probe(struct spi_device *spi);
+static int buffer_full = 0;
 
 MODULE_LICENSE("GPL v2");
 MODULE_AUTHOR("DaemonOnUnix & Shebour");
 MODULE_DESCRIPTION("Driver MFRC522 DRIL");
 
-static ssize_t __mfrc522_write(struct mfrc522_state *state, const char *buffer,
-			       size_t len)
+int isnumber(char c)
 {
-	int answer_size;
-	struct mfrc522_command command = { 0 };
+	return c >= '0' && c <= '9';
+}
 
-	if (mfrc522_parse(&command, buffer, len) < 0) {
-		pr_err("[MFRC522] Got invalid command\n");
-		return -EINVAL;
+int startswith(const char *src, const char *substr)
+{
+	int i = 0;
+
+	while (src[i] && substr[i]) {
+		if (src[i] != substr[i])
+			return 0;
+		i++;
+	}
+	return substr[i] == '\0';
+}
+
+int parse_cmd_write(const char *cmd, int *len, const char **data)
+{
+	// <len>:<data> with len <= 25 else truncate
+	char current_char;
+	int pos = 0;
+	int len_complete = 0;
+	int charCount = 0; // protects from integer overflow
+
+	*len = 0;
+
+	for (; cmd[pos]; pos++) {
+		current_char = cmd[pos];
+		if (current_char == ':') {
+			len_complete = 1;
+			if (cmd[pos + 1] == '\0')
+				return -EINVAL;
+			*data = cmd + pos + 1;
+			break;
+		}
+		if (!len_complete) {
+			if (isnumber(current_char)) {
+				if (charCount <= 2) {
+					*len = *len * 10 + (current_char - '0');
+					charCount++;
+				}
+			} else
+				return -EINVAL;
+		}
+	}
+	if (*len > 25)
+		*len = 25;
+	return 0;
+}
+
+void mem_write(const char *data)
+{
+	if (mfrc522_fifo_write(data, 25) < 0) {
+		pr_err("[MFRC522] Couldn't write to FIFO\n");
 	}
 
-	pr_info("[MFRC522] Got following command: %d\n", command.cmd);
+	mfrc522_send_command(MFRC522_COMMAND_REG_RCV_ON,
+			MFRC522_COMMAND_REG_POWER_DOWN_OFF,
+			MFRC522_COMMAND_MEM);
 
-	if (command.data[0])
-		pr_info("[MFRC522] With extra data: `%s`\n", command.data);
+	pr_info("[MFRC522] Wrote data to memory\n");
+}
 
-	answer_size = mfrc522_execute(state, state->answer, &command);
+int mem_read(char *answer)
+{
+	int byte_amount = 0;
 
-	if (answer_size < 0) {
-		pr_err("[MFRC522] Error when executing command\n");
-		return -EBADE;
+	mfrc522_fifo_flush();
+	if (mfrc522_send_command(MFRC522_COMMAND_REG_RCV_ON,
+				MFRC522_COMMAND_REG_POWER_DOWN_OFF,
+				MFRC522_COMMAND_MEM) < 0)
+		return -1;
+
+	byte_amount = mfrc522_fifo_read(answer);
+	if (byte_amount < 0) {
+		pr_err("[MFRC522] An error happened when reading MFRC522's internal memory\n");
+		return -1;
 	}
 
-	if (state->debug_on)
-		do_debug(&command, state->answer, answer_size);
+	return byte_amount;
+}
 
-	pr_info("[MFRC522] Answer: \"%.*s\"\n", answer_size, state->answer);
-	state->buffer_full = true;
+int generate_random(void)
+{
+	u8 buffer[25] = { 0 };
+	char char_buffer[MFRC522_ID_SIZE * 2 + 1] = { 0 };
+	int i = 0;
 
+	mem_write(buffer);
+
+	if (mfrc522_send_command(MFRC522_COMMAND_REG_RCV_ON,
+				MFRC522_COMMAND_REG_POWER_DOWN_OFF,
+				MFRC522_COMMAND_GENERATE_RANDOM_ID) < 0)
+		return -1;
+
+	mem_read(buffer);
+
+	for (i = 0; i < MFRC522_ID_SIZE; i++) {
+		sprintf(char_buffer + i * 2, "%02X", buffer[i]);
+	}
+
+	pr_info("[MFRC522] Rand ID: %s\n", char_buffer);
+
+	return 0;
+}
+
+void read_cmd(struct mfrc522 *dev, const char *cmd)
+{
+	int len;
+	const char buffer[25] = { 0 };
+	const char *data;
+	int ret;
+	size_t i = 0;
+	char *dbg;
+
+	if (startswith(cmd, "mem_write:")) {
+		ret = parse_cmd_write(cmd + 10, &len, &data);
+		if (ret < 0) {
+			pr_err("[MFRC522] Invalid write command\n");
+			return;
+		}
+		memcpy((void *)buffer, data, len);
+		mem_write(buffer);
+		if (device->debug) {
+			pr_info("[MFRC522] WR");
+			dbg = kmalloc(26, GFP_KERNEL);
+			memset(dbg, 0, 26);
+			memcpy(dbg, data, len);
+			for (; i < 25; i += 5)
+				pr_info("[MFRC522] %02x %02x %02x %02x %02x\n", dbg[i], dbg[i+1], dbg[i+2], dbg[i+3], dbg[i+4]);
+			kfree(dbg);
+		}
+		return;
+	}
+
+	if (startswith(cmd, "mem_read")) {
+		ret = mem_read(dev->str);
+		pr_info("[MFRC522] \"%s\"\n", dev->str);
+		return;
+	}
+
+	if (startswith(cmd, "gen_rand_id")) {
+		ret = generate_random();
+		return;
+	}
+
+	if (startswith(cmd, "debug:")) {
+		cmd += 6;
+		if (!strcmp(cmd, "on"))
+		{
+			device->debug = 1;
+			pr_info("[MFRC522] Debug on\n");
+		}
+		else if (!strcmp(cmd, "off"))
+		{
+			device->debug = 0;
+			pr_info("[MFRC522] Debug off\n");
+		}
+		return;
+	}
+	if (startswith(cmd, "version")) {
+		u8 version = mfrc522_get_version();
+		if (version == 0x91 || version == 0x92) {
+			pr_info("[MFRC522] version %d\n", version - 0x90);
+		}
+		return;
+	}
+	pr_err("[MFRC522] Unknown command !\n");
+}
+
+
+ssize_t driver_write(struct file *file, const char *buffer, size_t len,
+		loff_t *offset)
+{
+	struct mfrc522 *dev;
+	char k_buf[26] = { 0 };
+
+	if (copy_from_user(k_buf, buffer, len)) {
+		pr_err("[MFRC522] Copy from user fail\n");
+	}
+	dev = container_of(file->private_data, struct mfrc522, misc);
+	read_cmd(dev, k_buf);
+	buffer_full = 1;
 	return len;
 }
 
-static ssize_t mfrc522_write(struct file *file, const char *buffer, size_t len,
-			     loff_t *offset)
+static ssize_t driver_read(struct file *file, char *buffer, size_t len,
+		loff_t *offset)
 {
-	ssize_t ret;
-	char *answer;
-	struct mfrc522_state *state;
-	char kernel_buffer[MFRC522_MAX_INPUT_LEN] = { 0 };
+	struct mfrc522 *dev;
 
-	if (len > MFRC522_MAX_INPUT_LEN)
-		return -EINVAL;
+	dev = container_of(file->private_data, struct mfrc522, misc);
 
-	if (copy_from_user(kernel_buffer, buffer, len) != 0) {
-		pr_err("[MFRC522] Fail to copy from user\n");
-		return -EINVAL;
-	}
+	if (len > 25)
+		len = 25;
 
-	state = container_of(file->private_data, struct mfrc522_state, misc);
-	answer = state->answer;
-
-	pr_info("[MFRC522] Being written to: %.*s\n", len, kernel_buffer);
-
-	ret = __mfrc522_write(state, kernel_buffer, len);
-
-	return ret;
-}
-
-static ssize_t mfrc522_read(struct file *file, char *buffer, size_t len,
-			    loff_t *offset)
-{
-	struct mfrc522_state *state;
-	char *answer;
-
-	pr_info("[MFRC522] Being read from\n");
-
-	state = container_of(file->private_data, struct mfrc522_state, misc);
-
-	answer = state->answer;
-
-	if (!state->buffer_full)
+	if (!buffer_full)
 		return 0;
 
-	if (len > MFRC522_MEM_SIZE)
-		len = MFRC522_MEM_SIZE;
-
-	if (copy_to_user(buffer, answer, len) != 0) {
-		pr_err("[MFRC522] Fail to copy to user\n");
-		return -EINVAL;
+	if (copy_to_user(buffer, dev->str, len)) {
+		pr_err("[MFRC522] Copy to user fail\n");
 	}
-
-	state->buffer_full = false;
+	buffer_full = 0;
 
 	return len;
 }
 
 static const struct file_operations mfrc522_fops = {
 	.owner = THIS_MODULE,
-	.write = mfrc522_write,
-	.read = mfrc522_read,
+	.write = driver_write,
+	.read = driver_read,
 };
 
 static const struct of_device_id mfrc522_match_table[] = {
@@ -122,7 +239,6 @@ static const struct of_device_id mfrc522_match_table[] = {
 	{}
 };
 
-static int mfrc522_spi_probe(struct spi_device *spi);
 
 static struct spi_driver mfrc522_spi_driver = {
 	.driver = {
@@ -133,43 +249,27 @@ static struct spi_driver mfrc522_spi_driver = {
 	.probe = mfrc522_spi_probe,
 };
 
-/** Detect if the device we are talking to is an MFRC522 using the VersionReg,
- * section 9.3.4.8 of the datasheet
- *
- * @client SPI device
- *
- * @return -1 if not an MFRC522, version number otherwise
- */
 static int mfrc522_detect(struct spi_device *client)
 {
 	u8 version = mfrc522_get_version();
-	pr_info("version: %d\n", version);
-
-	switch (version) {
-	case MFRC522_VERSION_1:
-	case MFRC522_VERSION_2:
-		version = MFRC522_VERSION_NUM(version);
-		pr_info("[MFRC522] MFRC522 version %d detected\n", version);
+	if (version == 0x91 || version == 0x92) {
+		version = version - 0x90;
+		pr_info("[MFRC522] version %d\n", version);
 		return version;
-	default:
-		pr_info("[MFRC522] this chip is not an MFRC522: 0x%x\n",
-			version);
 	}
 
+	pr_err("[MFRC522] Bad version: 0x%x\n", version);
 	return -1;
 }
 
 static int mfrc522_spi_probe(struct spi_device *client)
 {
-	pr_info("[MFRC522] SPI Probed\n");
+	pr_info("[MFRC522] SPI found\n");
 
 	if (client->max_speed_hz > MFRC522_SPI_MAX_CLOCK_SPEED) {
-		pr_info("[MFRC522] Current speed (%u)Hz is too high. Setting speed to %uHz\n",
-			client->max_speed_hz, MFRC522_SPI_MAX_CLOCK_SPEED);
 		client->max_speed_hz = MFRC522_SPI_MAX_CLOCK_SPEED;
 	}
 
-	// FIXME: Don't register one global clientstruct spi_device *mfrc522_spi;
 	mfrc522_spi = client;
 
 	return mfrc522_detect(client) < 0;
@@ -178,24 +278,23 @@ static int mfrc522_spi_probe(struct spi_device *client)
 static int __init mfrc522_init(void)
 {
 	int ret;
-	struct mfrc522_state *state;
 
-	pr_info("MFRC522 init\n");
+	pr_info("[MFRC522] init\n");
 
-	state = kcalloc(1, sizeof(*state), GFP_KERNEL);
+	device = kcalloc(1, sizeof(*device), GFP_KERNEL);
 
-	if (!state)
+	if (!device)
 		return -ENOMEM;
 
-	state->misc = (struct miscdevice){
+	device->misc = (struct miscdevice){
 		.minor = MISC_DYNAMIC_MINOR,
-		.name = "mfrc522_misc",
-		.fops = &mfrc522_fops,
+			.name = "mfrc522",
+			.fops = &mfrc522_fops,
 	};
 
-	state->debug_on = false;
+	device->debug = false;
 
-	ret = misc_register(&state->misc);
+	ret = misc_register(&device->misc);
 	if (ret) {
 		pr_err("[MFRC522] Misc device initialization failed\n");
 		return ret;
@@ -207,21 +306,19 @@ static int __init mfrc522_init(void)
 		return ret;
 	}
 
-	dev_set_drvdata(state->misc.this_device, state);
-
-	g_state = state;
+	dev_set_drvdata(device->misc.this_device, device);
 
 	return 0;
 }
 
 static void __exit mfrc522_exit(void)
 {
-	misc_deregister(&g_state->misc);
+	misc_deregister(&device->misc);
 	spi_unregister_driver(&mfrc522_spi_driver);
 
-	kfree(g_state);
+	kfree(device);
 
-	pr_info("MFRC522 exit\n");
+	pr_info("[MFRC522] exit\n");
 }
 
 module_init(mfrc522_init);
